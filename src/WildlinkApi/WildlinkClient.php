@@ -4,33 +4,37 @@ namespace WildlinkApi;
 
 class WildlinkClient
 {
-    public function __construct($app_id, $secret, $uuid = '')
+    public function __construct($app_id, $secret, $uuid = '', $device_token = '')
     {
         $this->app_id = $app_id;
         $this->secret = $secret;
 
-        if ($uuid){
-            $result = $this->makeDeviceToken($uuid);
+        if ($uuid && $device_token){
+            // uuid and device token provided, so just store the values
+            $this->uuid = $uuid;
+            $this->device_token = $device_token;
         } else {
-            $result = $this->makeDeviceToken();
-        }
+            // generate a device token, with the UUID if we have it
+            $result = $this->makeDeviceToken($uuid);
 
-        if ($result->DeviceToken){
-            $this->device_token = $result->DeviceToken;
-        }
-        if ($result->UUID){
-            $this->uuid = $result->UUID;
+            if ($result->DeviceToken){
+                $this->device_token = $result->DeviceToken;
+            }
+            if ($result->UUID){
+                $this->uuid = $result->UUID;
+            }
         }
     }
 
     public function makeDeviceToken($uuid = '')
     {
         $date_time = date('Y-m-d H:i:sZ', time());
+        $post_obj = (object) [];
         if ($uuid){
-            @$post_obj->UUID = $uuid;
+            $post_obj->UUID = $uuid;
             $post_obj->OS = "Linux";
         } else {
-            @$post_obj->OS = "Linux";
+            $post_obj->OS = "Linux";
         }
         $response = $this->request('makeDeviceToken', array("post_obj"=>$post_obj));
 
@@ -47,44 +51,44 @@ class WildlinkClient
     }
 
     public function getEndpointInfo($function){
+        $api_info = (object) [];
+
         if ($function == 'makeDeviceToken'){
-            @$api_info->endpoint = '/v2/device';
+            $api_info->endpoint = '/v2/device';
             $api_info->method = 'POST';
         }
 
         // MERCHANT functions
         if ($function == 'getMerchantsById'){
-            @$api_info->endpoint = '/v2/merchant/?id=:id';
+            $api_info->endpoint = '/v2/merchant/?id=:id';
             $api_info->method = 'GET';
         }
 
-        /* TODO: coming soon...
-        if ($function == 'getAllEnabledMerchants'){
-            @$api_info->endpoint = '/v2/merchant/?disabled=false';
+        if ($function == 'getEnabledMerchants'){
+            $api_info->endpoint = '/v2/merchant/?disabled=false&cursor=:cursor';
             $api_info->method = 'GET';
         }
-        */
 
         // COMMISSION functions
         if ($function == 'getCommissionSummary'){
-            @$api_info->endpoint = '/v2/device/stats/commission-summary';
+            $api_info->endpoint = '/v2/device/stats/commission-summary';
             $api_info->method = 'GET';
         }
 
         if ($function == 'getCommissionDetails'){
-            @$api_info->endpoint = '/v2/device/stats/commission-detail';
+            $api_info->endpoint = '/v2/device/stats/commission-detail';
             $api_info->method = 'GET';
         }
 
         // CLICKS functions
         if ($function == 'getClickStats'){
-            @$api_info->endpoint = '/v2/device/stats/clicks?by=:by&start=:start&end=:end';
+            $api_info->endpoint = '/v2/device/stats/clicks?by=:by&start=:start&end=:end';
             $api_info->method = 'GET';
         }
 
         // VANITY URL functions
         if ($function == 'getVanityUrl'){
-            @$api_info->endpoint = '/v2/vanity';
+            $api_info->endpoint = '/v2/vanity';
             $api_info->method = 'POST';
         }
 
@@ -115,7 +119,7 @@ class WildlinkClient
             }
         }
 
-        if (@$vars['debug']){
+        if (isset($vars['debug'])){
             print_r($api_url);
         }
 
@@ -143,11 +147,11 @@ class WildlinkClient
             )
         );
 
-        if (@$vars['post_obj']){
+        if (isset($vars['post_obj'])){
             $opts['http']['content'] = json_encode($vars['post_obj']);
         }
 
-        if (@$vars['debug']){
+        if (isset($vars['debug'])){
             echo("\n\nauth token : " . print_r($auth_token, 1));
             echo("\n\npost data : " . print_r($opts, 1));
         }
@@ -156,7 +160,7 @@ class WildlinkClient
         $result_json = file_get_contents($api_url, false, $context);
         $result = json_decode($result_json);
 
-        if (@$vars['debug']){
+        if (isset($vars['debug'])){
             echo "\n\nresult:\n\n";
             print_r($result_json);
         }
@@ -175,17 +179,43 @@ class WildlinkClient
         }
     }
 
-    /* TODO: comming soon
     public function getAllEnabledMerchants()
     {
-        $result = $this->request('getAllEnabledMerchants');
+        $merchants = [];
+
+        $result = $this->request('getEnabledMerchants', [
+            'cursor' => ''
+        ]);
         if ($result->Merchants){
-            return $result->Merchants;
+            // request next pages until there are none left
+            $merchants += $result->Merchants;
+            while ($result->NextCursor){
+                $result = $this->request('getEnabledMerchants', [
+                    'cursor' => $result->NextCursor
+                ]);
+                if ($result->Merchants){
+                    $merchants = array_merge($merchants, $result->Merchants);
+                }
+            }
+            return $merchants;
         } else {
             return $result;
         }
     }
-    */
+
+    public function getPagedEnabledMerchants()
+    {
+        // FIXME: we may have multiple cursors to maintain in the future
+        if (!$this->cursor){
+            $this->cursor = '';
+        }
+
+        $result = $this->request('getEnabledMerchants', [
+            'cursor' => $this->cursor
+        ]);
+        $this->cursor = $result->NextCursor;
+        return $result->Merchants;
+    }
 
     // COMMISSION functions
     public function getCommissionSummary()
@@ -203,50 +233,50 @@ class WildlinkClient
     // CLICKS functions
     public function getClickStats($start, $end = '')
     {
-        $result = $this->request('getClickStats', array(
+        $result = $this->request('getClickStats', [
             'by' => 'day', // assume day intervals
             'start' => $start,
             'end' => $end
-        ));
+        ]);
         return $result;
     }
 
     public function getClickStatsByDay($start, $end = '')
     {
-        $result = $this->request('getClickStats', array(
+        $result = $this->request('getClickStats', [
             'by' => 'day',
             'start' => $start,
             'end' => $end
-        ));
+        ]);
         return $result;
     }
 
     public function getClickStatsByMonth($start, $end = '')
     {
-        $result = $this->request('getClickStats', array(
+        $result = $this->request('getClickStats', [
             'by' => 'month',
             'start' => $start,
             'end' => $end
-        ));
+        ]);
         return $result;
     }
 
     public function getClickStatsByYear($start, $end = '')
     {
-        $result = $this->request('getClickStats', array(
+        $result = $this->request('getClickStats', [
             'by' => 'year',
             'start' => $start,
             'end' => $end
-        ));
+        ]);
         return $result;
     }
 
     // VANITY URL functions
     public function getVanityUrl($url)
     {
-        $result = $this->request('getVanityUrl', array(
+        $result = $this->request('getVanityUrl', [
             'post_obj' => (object) ['URL'=>$url]
-        ));
+        ]);
         return $result;
     }
 
